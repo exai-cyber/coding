@@ -1,7 +1,5 @@
 import time
-from machine import Timer
 from bluetooth import BLE
-import ubinascii
 import M5
 from M5 import BtnA, BtnB
 
@@ -17,120 +15,144 @@ M5.update()
 ble = BLE()
 ble.active(True)
 
-OBD_NAME = "Twój_OBD_Name"  # wpisz nazwę swojego OBD
-connected = False
-conn_handle = None
-
+# === Zmienna do przechowywania znalezionych urządzeń ===
 devices_found = []
+connected = False
 
-# Callback BLE
+# --- Callback BLE do wykrywania OBD ---
 def ble_irq(event, data):
-    global connected, conn_handle
-    if event == 1:  # central connected
-        conn_handle, _, _ = data
-        connected = True
-        M5.Lcd.setCursor(10, 60)
-        M5.Lcd.print("Połączono z OBD!")
-    elif event == 2:  # central disconnected
-        connected = False
-        conn_handle = None
-        M5.Lcd.setCursor(10, 60)
-        M5.Lcd.print("Rozłączono!")
-    elif event == 5:  # advertising report
+    global devices_found
+    if event == 5:  # advertising report
         addr_type, addr, adv_type, rssi, adv_data = data
         name = ble.resolve_name(adv_data) or "Nieznane"
-        if name == OBD_NAME and name not in [d[0] for d in devices_found]:
+        if "OBD" in name and name not in [d[0] for d in devices_found]:
             devices_found.append((name, addr))
             M5.Lcd.setCursor(10, 40)
             M5.Lcd.print(f"Znaleziono OBD: {name}")
 
 ble.irq(ble_irq)
 
-# Skanowanie urządzeń BLE
+# --- Funkcja skanowania OBD ---
 def scan_obd(timeout_ms=5000):
     devices_found.clear()
     M5.Lcd.fillScreen(0xF81F)
     M5.Lcd.setCursor(10, 10)
-    M5.Lcd.print("Skanowanie OBD BLE...")
+    M5.Lcd.print("Skanowanie OBD...")
     ble.gap_scan(timeout_ms, 30000, 30000)
-    time.sleep((timeout_ms / 1000) + 1)
+    time.sleep((timeout_ms/1000)+1)
     ble.gap_scan(None)
     if not devices_found:
         M5.Lcd.setCursor(10, 60)
         M5.Lcd.print("Nie znaleziono OBD!")
+        time.sleep(2)
         return False
     return True
 
-# Połączenie z pierwszym znalezionym OBD
-def connect_obd():
-    global conn_handle, connected
-    name, addr = devices_found[0]
-    M5.Lcd.setCursor(10, 80)
-    M5.Lcd.print(f"Łączenie z {name}...")
-    # Tutaj normalnie wywołujesz ble.gap_connect(addr_type, addr)
-    # i pobierasz charakterystyki GATT RPM i Temp
-    time.sleep(2)
-    connected = True
-    M5.Lcd.setCursor(10, 100)
-    M5.Lcd.print("Połączono!")
+# --- Funkcje odczytu PID (placeholder, zastąp prawdziwym BLE) ---
+def read_rpm_from_obd():
+    rpm = 1500 + int(5000 * abs(time.ticks_ms() % 1000 - 500)/500)
+    return rpm
 
-# === Główna logika ===
+def read_temp_from_obd():
+    temp = 70 + int(40 * abs(time.ticks_ms() % 1000 - 500)/500)
+    return temp
+
+def get_temp_color(temp_value):
+    if temp_value < 75:
+        return 0xF800       # czerwony
+    elif 75 <= temp_value <= 87:
+        return 0xFDA0       # pomarańczowy
+    elif 88 <= temp_value <= 100:
+        return 0x07E0       # zielony
+    else:
+        return 0x03E0       # ciemnozielony
+
+def update_rpm_display(rpm_value):
+    M5.Lcd.fillRect(0, 0, 160, 80, 0xF81F)
+    M5.Lcd.setCursor(10, 10)
+    M5.Lcd.setTextSize(4)
+    M5.Lcd.print(f"RPM: {rpm_value}")
+
+def update_temp_display(temp_value, color):
+    M5.Lcd.fillScreen(color)
+    M5.Lcd.setCursor(10, 10)
+    M5.Lcd.setTextSize(4)
+    M5.Lcd.print(f"Temp: {temp_value}C")
+    if temp_value > 100:
+        M5.Lcd.setCursor(10, 60)
+        M5.Lcd.setTextSize(2)
+        M5.Lcd.print("PRZEGRZANY!")
+
+# === Główna logika programu ===
 if not scan_obd():
     M5.Lcd.setCursor(10, 80)
     M5.Lcd.print("Koniec programu.")
 else:
-    M5.Lcd.setCursor(10, 100)
-    M5.Lcd.print("Naciśnij A aby połączyć")
-    while not connected:
+    # --- Menu funkcji ---
+    menu_items = ["RPM", "Temperatura", "Wyjście"]
+    menu_index = 0
+
+    def draw_menu():
+        M5.Lcd.fillScreen(0xF81F)
+        M5.Lcd.setCursor(10, 10)
+        M5.Lcd.print("Wybierz funkcję:")
+        for i, item in enumerate(menu_items):
+            prefix = ">" if i == menu_index else " "
+            M5.Lcd.setCursor(10, 30 + i*20)
+            M5.Lcd.print(f"{prefix} {item}")
+
+    while True:
+        draw_menu()
         M5.update()
+        time.sleep(0.1)
+
         if BtnA.wasPressed():
-            connect_obd()
-        time.sleep(0.2)
+            menu_index = (menu_index + 1) % len(menu_items)
+        if BtnB.wasPressed():
+            selection = menu_items[menu_index]
 
-# === Połączenie ustanowione – główny interfejs ===
-display_mode = "RPM"
-max_rpm = 8000  # do pseudo-animacji
+            if selection == "Wyjście":
+                M5.Lcd.fillScreen(0x0000)
+                M5.Lcd.setCursor(10, 10)
+                M5.Lcd.setTextSize(2)
+                M5.Lcd.print("Wyłączanie...")
+                break
 
-while connected:
-    M5.update()
-    
-    # Odczyt danych z OBD przez GATT - tu można podstawić właściwe odczyty
-    if display_mode == "RPM":
-        rpm_value = 1500 + int(5000 * abs(time.ticks_ms() % 1000 - 500)/500)
-        M5.Lcd.fillRect(0, 0, 160, 80, 0xF81F)
-        M5.Lcd.setCursor(10, 10)
-        M5.Lcd.setTextSize(4)
-        M5.Lcd.print(f"RPM: {rpm_value}")
-    elif display_mode == "TEMP":
-        temp_value = 70 + int(40 * abs(time.ticks_ms() % 1000 - 500)/500)
-        # Kolor tła zależny od temperatury
-        if temp_value < 75:
-            color = 0xF800       # czerwony
-        elif 75 <= temp_value <= 87:
-            color = 0xFDA0       # pomarańczowy
-        elif 88 <= temp_value <= 100:
-            color = 0x07E0       # zielony
-        else:  # > 100
-            color = 0x03E0       # ciemnozielony
-        M5.Lcd.fillScreen(color)
-        M5.Lcd.setCursor(10, 10)
-        M5.Lcd.setTextSize(4)
-        M5.Lcd.print(f"Temp: {temp_value}C")
-        if temp_value > 100:
-            M5.Lcd.setCursor(10, 60)
-            M5.Lcd.setTextSize(2)
-            M5.Lcd.print("PRZEGRZANY!")
+            elif selection == "RPM":
+                last_rpm_time = time.ticks_ms()
+                rpm_interval = 300  # ms
+                prev_rpm = None
+                while True:
+                    now = time.ticks_ms()
+                    if time.ticks_diff(now, last_rpm_time) >= rpm_interval:
+                        last_rpm_time = now
+                        rpm_value = read_rpm_from_obd()
+                        if rpm_value != prev_rpm:
+                            update_rpm_display(rpm_value)
+                            prev_rpm = rpm_value
 
-    # Zmiana wyświetlanej wartości przyciskiem B
-    if BtnB.wasPressed():
-        display_mode = "TEMP" if display_mode == "RPM" else "RPM"
+                    M5.update()
+                    if BtnA.wasPressed() and BtnB.wasPressed():
+                        break
+                    time.sleep(0.05)
 
-    # Wyłączenie przy obu przyciskach
-    if BtnA.wasPressed() and BtnB.wasPressed():
-        M5.Lcd.fillScreen(0x0000)
-        M5.Lcd.setCursor(10, 10)
-        M5.Lcd.setTextSize(2)
-        M5.Lcd.print("Wyłączanie...")
-        break
+            elif selection == "Temperatura":
+                last_temp_time = time.ticks_ms()
+                temp_interval = 2000  # ms
+                prev_temp = None
+                prev_temp_color = None
+                while True:
+                    now = time.ticks_ms()
+                    if time.ticks_diff(now, last_temp_time) >= temp_interval:
+                        last_temp_time = now
+                        temp_value = read_temp_from_obd()
+                        temp_color = get_temp_color(temp_value)
+                        if temp_value != prev_temp or temp_color != prev_temp_color:
+                            update_temp_display(temp_value, temp_color)
+                            prev_temp = temp_value
+                            prev_temp_color = temp_color
 
-    time.sleep(0.15)
+                    M5.update()
+                    if BtnA.wasPressed() and BtnB.wasPressed():
+                        break
+                    time.sleep(0.05)
